@@ -1,0 +1,107 @@
+---
+title: "CART_df2"
+author: "Santiago Rossi"
+date: "31/10/2020"
+output: html_document
+---
+
+###Cargo librerias
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidymodels)
+library(tidyverse)
+```
+ 
+```{r cars}
+df_cultivos <- read_rds(path ="../../dataset/raw/df_cultivos.rds") 
+
+df_cultivos <- df_cultivos %>% as_tibble() %>% select(-geometry)
+#train_original <- read.csv("../dataset/data_train.csv") %>% select(Cultivo, GlobalId)
+
+#df_cultivos <- left_join(train_original,df_cultivos, by = "GlobalId") %>% mutate(Cultivo = Cultivo.x) %>% select(-Cultivo.y,-Cultivo.x) %>% select(Cultivo,everything())
+
+
+urbano <- df_cultivos[df_cultivos$Cultivo=="U",]
+df_cultivos <-  df_cultivos[df_cultivos$Cultivo!="U"|is.na(df_cultivos$Cultivo),]
+df_cultivos <-  df_cultivos[df_cultivos$Cultivo!="A"|is.na(df_cultivos$Cultivo),]
+df_cultivos <-  df_cultivos[df_cultivos$Cultivo!="S/M"|is.na(df_cultivos$Cultivo),]
+
+df_cultivos  <-df_cultivos  %>% mutate(Cultivo = factor(Cultivo))
+
+test <- df_cultivos  %>% filter(is.na(Cultivo)) 
+train <- df_cultivos %>% filter(!is.na(Cultivo)) %>% na.omit() #vuelo filas con faltantes
+
+```
+
+
+```{r pressure, echo=FALSE}
+
+set.seed(123)
+cultivos_split <- initial_split(train, strata = Cultivo)
+cultivos_train <- training(cultivos_split)
+cultivos_test <- testing(cultivos_split)
+set.seed(234)
+cultivos_folds <- vfold_cv(cultivos_train, strata = Cultivo)
+
+cart <- rpart::rpart(formula = Cultivo ~. , data = cultivos_train %>% as_tibble() %>% dplyr::select(-GlobalId), control = rpart::rpart.control(cp = 1e-10, minsplit = 10, maxdepth=10))
+```
+
+```{r}
+library(vip)
+
+cart %>%
+  vip(geom = "col", aesthetics = list(fill = "midnightblue", alpha = 0.8)) +
+  scale_y_continuous(expand = c(0, 0))
+
+rpart.plot::rpart.plot(cart,cex = .5,extra = 0)
+```
+
+```{r}
+
+validacion <- cultivos_test %>% as_tibble() %>% 
+  dplyr::mutate(cultivo_hat = stats::predict(object =cart, newdata = cultivos_test, type = 'class'),
+          cultivo_hat = factor(cultivo_hat,levels = levels(cultivos_test$Cultivo)),
+          cultivo_naive="S",
+          cultivo_naive= factor(cultivo_naive,levels = levels(cultivos_test$Cultivo))
+          )
+
+xtab <- table(validacion$cultivo_hat,validacion$Cultivo)
+
+matriz <- caret::confusionMatrix(xtab)
+matriz
+
+```
+
+### kappa .6786
+
+```{r}
+#entreno con df completo
+cart <- rpart::rpart(formula = Cultivo ~. , data = train %>% as_tibble() %>% dplyr::select(-GlobalId), control = rpart::rpart.control(cp = 1e-10, minsplit = 10, maxdepth=10))
+
+
+Etiquetas=read.csv("../../dataset/Etiquetas.csv")
+
+test$Cultivo=  predict(object = cart, newdata =  test, type = 'class')
+
+test <-  test %>% ungroup() %>%  
+  left_join(Etiquetas, by = "Cultivo")  %>% dplyr::select(GlobalId,CultivoId)
+
+puntos_urbanos_test <- read.csv("../../dataset/raw/puntos_urbanos_test.csv")
+
+test <- test %>%
+  full_join(puntos_urbanos_test, by = "GlobalId") %>% 
+  mutate(CultivoId = ifelse(!is.na(CultivoId.y),CultivoId.y, CultivoId.x)) %>% dplyr::select(GlobalId,CultivoId) 
+
+
+test_original <- read.csv("../../dataset/data_test.csv")%>% dplyr::select(GlobalId)
+
+sub_salida <- test_original %>%
+  left_join(test%>% ungroup() %>% dplyr::select(GlobalId,CultivoId), by = "GlobalId") %>% 
+  mutate(CultivoId = ifelse(is.na(CultivoId),1, CultivoId))
+
+sub_salida
+
+sub_salida %>%  
+  write.table(file="salida_modelo_base_CART.csv", row.names=FALSE, col.names=FALSE, sep=",")
+
+```

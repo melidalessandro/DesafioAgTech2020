@@ -1,0 +1,178 @@
+---
+title: "Reporte Final"
+author: "Melina D'Alessandro"
+date: "17/12/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, 
+                      message = FALSE, 
+                      eval = TRUE, 
+                      comment = "", 
+                      warning = FALSE,
+                      fig.align='center',
+                      dpi = 100,
+                      bootstrap.thumbnail = FALSE)
+
+library(tidyverse)
+library(sf)
+```
+
+## Requerimientos
+
+El preprocesamiento se hizo con R y lo modelos en Python por lo que es necesario contar con ambos programas para poder replicar todo el proceso.
+
+Asismismo, es necesario instalar la siguientes librerias.
+
+Librerias R: `tidyverse`, `sf` y `raster`.
+
+Librerias Python: `pandas`, `numpy`, `pyreadr`, `sklearn`, `tensorflow`, `keras` y `os`.
+
+
+## Datos
+
+Al dataset de entrenamiento original `train` se le aplicaron distintas transformaciones:
+
+* Se aumentó la cantidad de datos tomando puntos alrededor de los puntos de train. Esta fue una recomendación sugerida por Alfredo Campos en su webinar.
+* Se extrajo para cada punto (originales y aumentados) las bandas 2 (azul), 3 (verde), 4 (rojo), 8 (nir) y 11 (swir) del satélite Sentinel-2 para todas las fechas con baja presencia de nubes entre las fechas 2018-10-04 y 2019-07-06, en el caso de la Campaña 18/19, y 2019-09-14 a 2020-07-25, en el caso de la campaña 19/20. Se cuenta con 17 y 20 imágenes para cada campaña respectivamente.
+* Se generaron las variables/bandas ndwi, ndvi, evi,  PSSRb1 (pigment specific simple ratio B1), barren_soil y savi a partir de las bandas anteriores.
+* Se hizo una interpolación lineal y loess con periodicidad diaria para completar datos faltantes (por ausencia de imágenes). Se calculó el promedio de cada variable cada diez días.
+* Siguiendo las recomendaciones de los webinars de Yanina Bellini y el trabajo de [Santiago Banchero](https://inta.gob.ar/sites/default/files/mapa_nacional_de_cultivos_campana_2018_2019.pdf) se extrajeron los ejidos urbanos y cuerpos de agua estable utilizando capas SIG del [Instituto Geográfico de la Nación](https://www.ign.gob.ar/NuestrasActividades/InformacionGeoespacial/CapasSIG).
+
+A continuación se describe con mayor detalle algunos de los puntos anteriores.
+
+#### Aumento de los datos
+
+A partir del dataset de entrenamiento original `train` se aplicaron distintas transformaciones. En primer lugar, para aumentar la cantidad de observaciones se tomaron puntos alrededor de los puntos origniales a los que se les asigno la misma etiqueta que el dato original (ver Figura 1). Esto nos permite captar mayor variabilidad en los lotes que tienen la misma clase.
+
+![Figura 1](img/df_aumentado.PNG)
+
+
+#### Imágenes e índices 
+
+Se extrajo para cada punto (originales y aumentados) las bandas 2 (azul), 3 (verde), 4 (rojo), 8 (nir) y 11 (swir) del satélite Sentinel-2 para todas las fechas con baja presencia de nubes entre las fechas 2018-10-04 y 2019-07-06, en el caso de la Campaña 18/19, y 2019-09-14 a 2020-07-25, en el caso de la campaña 19/20. Se cuenta con 17 y 20 imágenes para cada campaña respectivamente.
+
+Se generaron las variables/bandas ndwi, ndvi, evi,  PSSRb1 (pigment specific simple ratio B1), barren_soil y savi a partir de las bandas anteriores.
+
+A continuación, en la Figura 2, se muestra la evolución de la mediana del EVI para las distintas clases del dataset. Se puede apreciar que la dinámica de esta variables difiere en las distintas clases.
+
+```{r,  fig.cap='Figura 2: Evolución de EVI para las distintas clases del dataset'}
+train <- read.csv("../dataset/data_train.csv")
+test <- read.csv("../dataset/data_test.csv")
+
+train <- sf::st_as_sf(train, coords=c("Longitud","Latitud"), crs = 4326)
+test <- sf::st_as_sf(test, coords=c("Longitud","Latitud"), crs = 4326)
+
+df_cultivos <- bind_rows(train,test)
+
+nombres_df_bandas <- list.files(path = "../dataset/raw/bandas_procesadas/")
+
+df_bandas <- tibble()
+
+for (i in nombres_df_bandas) {
+  tmp <- read.csv( paste0( "../dataset/raw/bandas_procesadas/",i),stringsAsFactors = F) %>%
+    mutate(fecha =as.Date(fecha,"%Y-%m-%d"),
+           Campania = case_when(fecha<as.Date("2019-08-01", format="%Y-%m-%d")~"18/19",
+                                fecha >as.Date("2019-08-01", format="%Y-%m-%d")~"19/20",
+                                          T~NA_character_))
+  
+  df_bandas <- bind_rows(df_bandas,tmp )
+}
+
+df_bandas <- df_cultivos %>% left_join(df_bandas, by=c("GlobalId"="GloblaId","Campania" ))
+
+df_bandas <- df_bandas %>% mutate_if(.tbl = .,.predicate = is.numeric,.funs = function(x){ifelse(x==0,NA,x)})
+
+df_bandas <- df_bandas %>% mutate(n_dia_campania = fecha - as.Date(paste0("20",str_sub(string = Campania,start = 1,end = 2),"-09-01")) ,
+                                  id_campana = case_when(Campania=="18/19"~1,
+                                                         T~2)) 
+
+df_bandas <- df_bandas %>% as_tibble()
+
+df_bandas %>% as_tibble() %>%  group_by(Cultivo, fecha ) %>%
+  summarise(mediana = median(evi, na.rm = T),
+             promedio = mean(evi, na.rm = T),
+            p_25 = stats::quantile(evi, probs = .25, na.rm=T),
+            p_75 = stats::quantile(evi, probs = .75, na.rm=T)) %>%
+  ggplot(aes(as.Date(fecha),mediana,group=Cultivo, col= mediana))+
+  geom_line(size=1.05)+
+  #geom_line(aes(as.Date(fecha), promedio))+
+  #geom_line(aes(as.Date(fecha), p_25),color="darkred")+
+  #geom_line(aes(as.Date(fecha), p_75),color="darkblue")+
+  facet_wrap(~Cultivo)+scale_x_date()+
+  labs(title = 'Evolución de EVI para las distintas clases del dataset', x='Fecha', y='Mediana EVI', col ="EVI")+
+  theme_bw()+ theme(plot.title = element_text(hjust = .5),axis.text.x = element_text(angle=90))
+
+```
+
+
+Dado que en algunas oportunidades la presencia de nubes impedia obtener información para algunas fechas se completo las fechas faltantes aplicando dos tecnicas de interpolación: un metodo linea y uno loess. 
+
+En la Figura 3 se muestra la evolución de la mediana del EVI con interpolación loess cada 10 días desde el 1 de octubre de cada año.
+
+```{r loess, echo=FALSE,  fig.cap='Figura 3: Evolución de EVI con interpolación loess para las distintas clases del dataset'}
+nombres_df_bandas <- list.files(path = "../dataset/raw/loop_df_aumentado/")
+
+df_bandas <- tibble()
+
+
+for (i in nombres_df_bandas) {
+  tmp <- readRDS( file = paste0( "../dataset/raw/loop_df_aumentado/",i))
+  
+  df_bandas <- bind_rows(df_bandas,tmp )
+}
+
+
+df_bandas %>% as_tibble() %>%  group_by(Cultivo,Campania, g10_dias ) %>%
+  summarise(mediana = median(fit_evi, na.rm = T) ) %>%
+  ggplot(aes(g10_dias,mediana,group=Campania, col= Campania))+
+  geom_line(size=1.05)+
+  #geom_line(aes(as.Date(fecha), promedio))+
+  #geom_line(aes(as.Date(fecha), p_25),color="darkred")+
+  #geom_line(aes(as.Date(fecha), p_75),color="darkblue")+
+  facet_wrap(~Cultivo)+#scale_x_date()+
+  labs(title = 'Evolución de EVI con interpolación loess para las distintas clases del dataset', x='dias desde el 1/10 de cada año', y='Mediana EVI', col ="Campaña")+
+  theme_bw()+ theme(plot.title = element_text(hjust = .5))
+```
+
+En la Figura 4 se muestra la evolución de la mediana del EVI con interpolación lineal cada 10 días desde el 1 de octubre de cada año.
+
+```{r lineal, echo=FALSE,  fig.cap='Figura 4: Evolución de EVI con interpolación lineal para las distintas clases del dataset'}
+df_bandas %>% as_tibble() %>%  group_by(Cultivo,Campania, g10_dias ) %>%
+  summarise(mediana = median(evi, na.rm = T) ) %>%
+  ggplot(aes(g10_dias,mediana,group=Campania, col= Campania))+
+  geom_line(size=1.05)+
+  #geom_line(aes(as.Date(fecha), promedio))+
+  #geom_line(aes(as.Date(fecha), p_25),color="darkred")+
+  #geom_line(aes(as.Date(fecha), p_75),color="darkblue")+
+  facet_wrap(~Cultivo)+#scale_x_date()+
+  labs(title = 'Evolución de EVI con interpolación lineal para las distintas clases del dataset', x='dias desde el 1/10 de cada año', y='Mediana EVI', col ="Campaña")+
+  theme_bw()+ theme(plot.title = element_text(hjust = .5))
+```
+
+## Modelado
+
+Se construyeron tres modelos. El primer modelo, denominado `modelo_base` es una red neural feed forward con dos capas densas que se entreno con el dataset `df_rn_base.csv`. El segundo modelo, denominado `modelo_rn_v2` es tambien una red neuronal feed forward pero entrenada con el dataset `df_train_rn_full_v2.csv`. Todos los datasets se encuentran en la carpeta `datasets/raw`.
+
+El dataset `df_rn_base.csv` surge de realizar los pasos descriptos en la sección previa pero se seleccionan 325 variables para los cuales las variables seleccionadas no contaban con faltantes en el dataset de test.
+
+En tanto que el dataset `df_train_rn_full_v2.csv` surge de realizar los pasos descriptos en la sección previa pero se conservan todas las variables, en total 525 variables.
+
+Se estimó un tercer modelo para completar faltantes de una unica observacion faltante el cual consiste en un arbol de decisión CART.
+
+
+#### Archivos
+
+En la carpeta `../code/` se encuentran los scripts de los tres modelos.
+
+En la carpeta `../code/modelo_base/` se encuentran los archivos `rn_base.py` en el que se entrena el modelo 1 y el archivo `prediccion_rn_base.py` con el que se realizan las predicciones. Para ahorrar tiempo y no tener que reentrenar en la carpeta se encuentra tambien el modelo entrenado `modelo_base.h5` por lo que se sugiere correr directamente `prediccion_rn_base.py`.
+
+En la carpeta `../code/RN_v2/` se encuentran los archivos `rn_v2.py` en el que se entrena el modelo final y el archivo `prediccion_rn_v2.py` con el que se realizan las predicciones. Para ahorrar tiempo y no tener que reentrenar en la carpeta se encuentra tambien el modelo entrenado `modelo_v2.h5` por lo que se sugiere correr directamente `prediccion_rn_v2.py`.
+
+Los resultados de cada modelo se guardaron en su respectiva carpeta. El resultado final enviado se encuentra duplicado en la carpeta `resultado` y en `../code/RN_v2/`.
+
+
+
+
