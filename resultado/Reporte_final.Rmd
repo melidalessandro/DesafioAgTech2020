@@ -52,9 +52,9 @@ A partir del dataset de entrenamiento original `train` se aplicaron distintas tr
 
 #### Imágenes e índices 
 
-Se extrajo para cada punto (originales y aumentados) las bandas 2 (azul), 3 (verde), 4 (rojo), 8 (nir) y 11 (swir) del satélite Sentinel-2 para todas las fechas con baja presencia de nubes entre las fechas 2018-10-04 y 2019-07-06, en el caso de la Campaña 18/19, y 2019-09-14 a 2020-07-25, en el caso de la campaña 19/20. Se cuenta con 17 y 20 imágenes para cada campaña respectivamente.
+Se extrajo para cada punto (originales y aumentados) las bandas 2 (azul), 3 (verde), 4 (rojo), 8 (nir) y 11 (swir) del satélite Sentinel-2 para todas las fechas con baja presencia de nubes entre las fechas 2018-10-04 y 2019-07-06 en el caso de la Campaña 18/19, y 2019-09-14 a 2020-07-25, en el caso de la campaña 19/20. Se cuenta con 17 y 20 imágenes para cada campaña respectivamente.
 
-Se generaron las variables/bandas ndwi, ndvi, evi,  PSSRb1 (pigment specific simple ratio B1), barren_soil y savi a partir de las bandas anteriores.
+Se generaron las variables/bandas NDWI, NDVI, EVI, PSSRb1 (pigment specific simple ratio B1), barren_soil y SAVI a partir de las bandas anteriores.
 
 A continuación, en la Figura 2, se muestra la evolución de la mediana del EVI para las distintas clases del dataset. Se puede apreciar que la dinámica de esta variables difiere en las distintas clases.
 
@@ -107,8 +107,7 @@ df_bandas %>% as_tibble() %>%  group_by(Cultivo, fecha ) %>%
 
 ```
 
-
-Dado que en algunas oportunidades la presencia de nubes impedia obtener información para algunas fechas se completo las fechas faltantes aplicando dos tecnicas de interpolación: un metodo linea y uno loess. 
+Dado que en algunas oportunidades la presencia de nubes impedía obtener información para algunas fechas se completó las fechas faltantes aplicando dos técnicas de interpolación: un método lineal y uno loess. 
 
 En la Figura 3 se muestra la evolución de la mediana del EVI con interpolación loess cada 10 días desde el 1 de octubre de cada año.
 
@@ -127,13 +126,13 @@ for (i in nombres_df_bandas) {
 
 df_bandas %>% as_tibble() %>%  group_by(Cultivo,Campania, g10_dias ) %>%
   summarise(mediana = median(fit_evi, na.rm = T) ) %>%
-  ggplot(aes(g10_dias,mediana,group=Campania, col= Campania))+
+  ggplot(aes(g10_dias*10/30,mediana,group=Campania, col= Campania))+
   geom_line(size=1.05)+
   #geom_line(aes(as.Date(fecha), promedio))+
   #geom_line(aes(as.Date(fecha), p_25),color="darkred")+
   #geom_line(aes(as.Date(fecha), p_75),color="darkblue")+
   facet_wrap(~Cultivo)+#scale_x_date()+
-  labs(title = 'Evolución de EVI con interpolación loess para las distintas clases del dataset', x='dias desde el 1/10 de cada año', y='Mediana EVI', col ="Campaña")+
+  labs(title = 'Evolución de EVI con interpolación loess para las distintas clases del dataset', x='Meses desde octubre para cada año', y='Mediana EVI', col ="Campaña")+
   theme_bw()+ theme(plot.title = element_text(hjust = .5))
 ```
 
@@ -142,36 +141,49 @@ En la Figura 4 se muestra la evolución de la mediana del EVI con interpolación
 ```{r lineal, echo=FALSE,  fig.cap='Figura 4: Evolución de EVI con interpolación lineal para las distintas clases del dataset'}
 df_bandas %>% as_tibble() %>%  group_by(Cultivo,Campania, g10_dias ) %>%
   summarise(mediana = median(evi, na.rm = T) ) %>%
-  ggplot(aes(g10_dias,mediana,group=Campania, col= Campania))+
+  ggplot(aes(g10_dias*10/30,mediana,group=Campania, col= Campania))+
   geom_line(size=1.05)+
   #geom_line(aes(as.Date(fecha), promedio))+
   #geom_line(aes(as.Date(fecha), p_25),color="darkred")+
   #geom_line(aes(as.Date(fecha), p_75),color="darkblue")+
   facet_wrap(~Cultivo)+#scale_x_date()+
-  labs(title = 'Evolución de EVI con interpolación lineal para las distintas clases del dataset', x='dias desde el 1/10 de cada año', y='Mediana EVI', col ="Campaña")+
+  labs(title = 'Evolución de EVI con interpolación lineal para las distintas clases del dataset', x='Meses desde octubre para cada año', y='Mediana EVI', col ="Campaña")+
   theme_bw()+ theme(plot.title = element_text(hjust = .5))
 ```
 
+### Datasets finales
+
+El primer dataset es el utilizado por el modelo CART, cada columna del dataset `df_cultivos.rds` corresponde al valor de la banda (EVI, SAVI, NDVI, etc) en la fecha original de la imágen Sentinel-2 (es decir sin interpolar). Este dataset está conformado por 332 variables y 1405 observaciones. El archivo de test contiene el total de las 555 observaciones a predecir.
+
+El segundo dataset es `df_rn_base.csv`, el cual surge de realizar los pasos descriptos en la sección previa y se seleccionan 325 variables que no contaban con faltantes en el dataset de test. Este archivo contiene 20749 observaciones y el archivo de test tiene 554 observaciones de las 555 que se deben predecir.
+
+Por último, el dataset `df_train_rn_full_v2.csv` surge de realizar los pasos descriptos anteriormente conservando 525 variables y 20520 observaciones. El archivo de test contiene 547 de las 555 observaciones que se deben predecir.
+
+Todos los datasets se encuentran en la carpeta `datasets/raw`.
+
 ## Modelado
 
-Se construyeron tres modelos. El primer modelo, denominado `modelo_base` es una red neural feed forward con dos capas densas que se entreno con el dataset `df_rn_base.csv`. El segundo modelo, denominado `modelo_rn_v2` es tambien una red neuronal feed forward pero entrenada con el dataset `df_train_rn_full_v2.csv`. Todos los datasets se encuentran en la carpeta `datasets/raw`.
+Se construyeron tres modelos para la predicción final. El primer modelo consiste en un árbol de decisión CART que se entrena con el dataset `df_cultivos.rds`. Como el algoritmo CART puede trabajar con faltantes nos proporcionara una predicción para las 55 observaciones de test.
 
-El dataset `df_rn_base.csv` surge de realizar los pasos descriptos en la sección previa pero se seleccionan 325 variables para los cuales las variables seleccionadas no contaban con faltantes en el dataset de test.
+El segundo modelo, denominado `modelo_base` es una red neural feed forward con dos capas densas que se entrena con el dataset `df_rn_base.csv`. 
 
-En tanto que el dataset `df_train_rn_full_v2.csv` surge de realizar los pasos descriptos en la sección previa pero se conservan todas las variables, en total 525 variables.
+El último modelo denominado `modelo_rn_v2` se trata de la misma red neuronal feed forward pero entrenada con el dataset `df_train_rn_full_v2.csv`. Con este modelo se obtienen 547 predicciones.
 
-Se estimó un tercer modelo para completar faltantes de una unica observacion faltante el cual consiste en un arbol de decisión CART.
+En la figura 5 se puede ver un resumen de todos los modelos.
 
-
-#### Archivos
+![Figura 5](img/modelo_final.PNG)
 
 En la carpeta `../code/` se encuentran los scripts de los tres modelos.
 
-En la carpeta `../code/modelo_base/` se encuentran los archivos `rn_base.py` en el que se entrena el modelo 1 y el archivo `prediccion_rn_base.py` con el que se realizan las predicciones. Para ahorrar tiempo y no tener que reentrenar en la carpeta se encuentra tambien el modelo entrenado `modelo_base.h5` por lo que se sugiere correr directamente `prediccion_rn_base.py`.
+## Reproducción de resultados
 
-En la carpeta `../code/RN_v2/` se encuentran los archivos `rn_v2.py` en el que se entrena el modelo final y el archivo `prediccion_rn_v2.py` con el que se realizan las predicciones. Para ahorrar tiempo y no tener que reentrenar en la carpeta se encuentra tambien el modelo entrenado `modelo_v2.h5` por lo que se sugiere correr directamente `prediccion_rn_v2.py`.
+En primer lugar se deben generar los resultados del modelo CART para todas las observaciones mediante el código `modelo_CART_para_faltantes.Rmd`.
 
-Los resultados de cada modelo se guardaron en su respectiva carpeta. El resultado final enviado se encuentra duplicado en la carpeta `resultado` y en `../code/RN_v2/`.
+Luego, se debe entrenar la red neuronal y predecir con el modelo base. En la carpeta `../code/modelo_base/` se encuentran los archivos `rn_base.py`, en el que se entrena la red neuronal, el modelo entrenado `modelo_base.h5` y el archivo `prediccion_rn_base.py` con el que se realizan las predicciones. En este último código de predicción se incluye el resultado del modelo CART.
+
+Por último, en la carpeta `../code/RN_v2/` se encuentran los archivos `rn_v2.py` en el que se entrena el modelo principal, su resultado en `modelo_v2.h5` y el archivo `prediccion_rn_v2.py` con el que se realizan las predicciones finales. Este archivo de predicciones finales incluye la concatenación con los resultados del modelo base y el CART.
+
+Los resultados de cada modelo se guardaron en su respectiva carpeta. El resultado final enviado se encuentra tanto como salida del primer modelo en la carpeta en `../code/RN_v2/` y en la carpeta de `resultado`.
 
 
 
